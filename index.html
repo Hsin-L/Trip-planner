@@ -2520,57 +2520,121 @@
     localStorage.removeItem(KEY_DATA);
     renderAll();
   }
+// =============================
+// Init + Bindings
+// =============================
+let UI_BOUND = false;
+function bindUIOnce(){
+  if(UI_BOUND) return;
+  UI_BOUND = true;
 
-  // =============================
-  // Init + Bindings
-  // =============================
-  function renderAll(){
-    const d = loadData();
-    renderHeader(d);
-    renderSettings(d);
-    renderFixed(d);
-    renderDays(d);
-    renderReminders(d);
-    renderFood(d);
-    applyFilter();
-  }
-
-  document.getElementById("q").addEventListener("input", applyFilter);
-
-  document.getElementById("onlyFixed").addEventListener("change", ()=>{
-    if(document.getElementById("onlyFixed").checked) document.getElementById("onlyFlex").checked = false;
+  document.getElementById("q").addEventListener("input", function () {
     applyFilter();
   });
-  document.getElementById("onlyFlex").addEventListener("change", ()=>{
-    if(document.getElementById("onlyFlex").checked) document.getElementById("onlyFixed").checked = false;
+
+  document.getElementById("onlyFixed").addEventListener("change", function () {
+    var onlyFixed = document.getElementById("onlyFixed");
+    var onlyFlex = document.getElementById("onlyFlex");
+    if (onlyFixed && onlyFixed.checked && onlyFlex) {
+      onlyFlex.checked = false;
+    }
     applyFilter();
   });
-  document.getElementById("onlyTodo").addEventListener("change", applyFilter);
 
-  document.getElementById("expandAll").addEventListener("click", ()=>expandAll(true));
-  document.getElementById("collapseAll").addEventListener("click", ()=>expandAll(false));
-  document.getElementById("print").addEventListener("click", ()=>window.print());
+  document.getElementById("onlyFlex").addEventListener("change", function () {
+    var onlyFixed = document.getElementById("onlyFixed");
+    var onlyFlex = document.getElementById("onlyFlex");
+    if (onlyFlex && onlyFlex.checked && onlyFixed) {
+      onlyFixed.checked = false;
+    }
+    applyFilter();
+  });
 
-  document.getElementById("resetDoneNote").addEventListener("click", ()=>{
-    if(confirmDanger("確定要清空所有勾選與備註嗎？（保留清單文字內容）")){
+  document.getElementById("onlyTodo").addEventListener("change", function () {
+    applyFilter();
+  });
+
+  document.getElementById("expandAll").addEventListener("click", function () {
+    expandAll(true);
+  });
+  document.getElementById("collapseAll").addEventListener("click", function () {
+    expandAll(false);
+  });
+  document.getElementById("print").addEventListener("click", function () {
+    window.print();
+  });
+
+  document.getElementById("resetDoneNote").addEventListener("click", function () {
+    if (confirmDanger("確定要清空所有勾選與備註嗎？（會先自動備份，並保留清單文字內容）")) {
+      makeBackup("before_clear_done_note");
       clearDoneNoteOnly();
     }
   });
 
-  document.getElementById("resetAll").addEventListener("click", ()=>{
-    if(confirmDanger("確定要『重設全部』回到預設模板嗎？（包含你新增/修改的所有內容都會消失）")){
+  document.getElementById("resetAll").addEventListener("click", function () {
+    if (confirmDanger("確定要『重設全部』回到預設模板嗎？（會先自動備份，且不可復原）")) {
+      makeBackup("before_reset_all");
       resetAllToDefault();
     }
   });
 
-  document.getElementById("addFixed").addEventListener("click", ()=> openFixedModal(null));
-  document.getElementById("addReminder").addEventListener("click", ()=> openReminderModal(null));
-  document.getElementById("addRestaurant").addEventListener("click", ()=> openRestaurantModal(null));
+  document.getElementById("addFixed").addEventListener("click", function () {
+    openFixedModal(null);
+  });
+  document.getElementById("addReminder").addEventListener("click", function () {
+    openReminderModal(null);
+  });
+  document.getElementById("addRestaurant").addEventListener("click", function () {
+    openRestaurantModal(null);
+  });
 
-  document.getElementById("editMetaTop").addEventListener("click", openMetaModal);
-  document.getElementById("editMetaCard").addEventListener("click", openMetaModal);
+  document.getElementById("editMetaTop").addEventListener("click", function () {
+    openMetaModal();
+  });
+  document.getElementById("editMetaCard").addEventListener("click", function () {
+    openMetaModal();
+  });
 
-  renderAll();
-</script>
-</body>
-</html>
+  // Export / Import
+  document.getElementById("exportJson").addEventListener("click", function () {
+    exportJson();
+  });
+
+  document.getElementById("importJson").addEventListener("click", function () {
+    var el = document.getElementById("importFile");
+    if (!el) return;
+    el.value = "";
+    el.click();
+  });
+
+  var importFile = document.getElementById("importFile");
+  if (importFile) {
+    importFile.addEventListener("change", function (e) {
+      var file = e.target.files && e.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        try {
+          importJsonText(String(reader.result || ""));
+        } catch (err) {
+          alert("匯入失敗：檔案不是有效的 JSON。");
+        }
+      };
+      reader.readAsText(file);
+    });
+  }
+}
+
+function renderAll(){
+  bindUIOnce();
+  const d = loadData();
+  renderHeader(d);
+  renderSettings(d);
+  renderFixed(d);
+  renderDays(d);
+  renderReminders(d);
+  renderFood(d);
+  applyFilter();
+}
+
+renderAll();
