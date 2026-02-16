@@ -518,6 +518,710 @@
         <button id="expandAll" type="button">全部展開</button>
         <button id="collapseAll" type="button">全部收起</button>
         <button id="print" type="button">列印 / 存 PDF</button>
+        <button id="exportJson" type="button">匯出 JSON</button>
+        <button id="importJson" type="button">匯入 JSON</button>
+        <input id="importFile" type="file" accept="application/json" style="display:none" />
+        <button id="resetDoneNote" type="button">清空勾選/備註</button>
+        <button id="resetAll" class="btnDanger" type="button">重設全部</button>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+        <div class="cardHead">
+          <h2>
+            旅遊設定（日期 / 地點 / 標題）
+            <button id="editMetaCard" class="iconBtn" type="button" title="編輯" aria-label="編輯旅遊設定">✎</button>
+          </h2>
+          <div class="muted" style="font-size:12px;">儲存後會自動補齊每日日期區塊</div>
+        </div>
+        <div class="cardBody" id="settings"></div>
+      </section>
+
+      <section class="card">
+        <div class="cardHead">
+          <h2>交通與住宿（航班 / 交通 / 住宿）</h2>
+          <div class="headBtns">
+            <button id="addFixed" class="btnSmall btnAccent" type="button">＋新增</button>
+          </div>
+        </div>
+        <div class="cardBody" id="fixedList"></div>
+      </section>
+
+      <section class="card">
+        <div class="cardHead">
+          <h2 id="daysTitle">每日行程</h2>
+          <div class="muted" style="font-size:12px;">用 <details>/<summary> 快速展開/收起整天</div>
+        </div>
+        <div id="days"></div>
+      </section>
+
+      <section class="card">
+        <div class="cardHead">
+          <h2>提醒事項</h2>
+          <div class="headBtns">
+            <button id="addReminder" class="btnSmall btnAccent" type="button">＋新增</button>
+          </div>
+        </div>
+        <div class="cardBody" id="reminders"></div>
+      </section>
+
+      <section class="card">
+        <div class="cardHead">
+          <h2>餐廳清單</h2>
+          <div class="headBtns">
+            <button id="addRestaurant" class="btnSmall btnAccent" type="button">＋新增</button>
+          </div>
+        </div>
+        <div class="cardBody" id="food"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ===== Reusable Modal ===== -->
+  <dialog id="modal">
+    <form id="modalForm" method="dialog">
+      <div class="modalHead">
+        <h3 class="mh" id="modalTitle">編輯</h3>
+        <button class="iconBtn" type="button" id="modalClose" aria-label="關閉">✕</button>
+      </div>
+      <div class="modalBody">
+        <div class="modalGrid" id="modalFields"></div>
+      </div>
+      <div class="modalFoot">
+        <button type="button" id="modalCancel">取消</button>
+        <button type="submit" class="btnAccent" id="modalSave">儲存</button>
+      </div>
+    </form>
+  </dialog>
+
+<script>
+  const KEY_DATA = "trip_planner_frontend_v3_date_time_maps";
+
+  function uid(prefix="id"){
+    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;
+  }
+
+  const DEFAULT_DATA = {
+    meta: {
+      title: "10/27–11/1 行程表（杭州・蘇州・上海）",
+      start: "2026-10-27",
+      end: "2026-11-01",
+      locations: ["杭州","蘇州","上海"]
+    },
+    fixed: [
+      { id: uid("fx"), dateText:"10/27（二）", kind:"航班", text:"HX253：TPE 11:50 → HKG 13:55", type:"flight", fixed:true, done:false, note:"", map:"" },
+      { id: uid("fx"), dateText:"10/27（二）", kind:"航班", text:"HX128：HKG 21:25 → HGH 23:40", type:"flight", fixed:true, done:false, note:"", map:"" },
+      { id: uid("fx"), dateText:"11/1（日）", kind:"航班", text:"BR711：PVG 13:15 → TPE 15:15", type:"flight", fixed:true, done:false, note:"", map:"" },
+      { id: uid("fx"), dateText:"10/27–10/29", kind:"住宿", text:"杭州木蘭道飯店（河坊街店）2晚", type:"hotel", fixed:true, done:false, note:"", map:"" }
+    ],
+    days: [], // 會依 meta.start/end 自動建立
+    reminders: [
+      { id: uid("rm"), text:"把護照/簽證/保險確認一遍", fixed:true, type:"reminder", done:false, note:"", map:"" }
+    ],
+    restaurants: [
+      { id: uid("rs"), city:"杭州", name:"四灶兒私房菜", fixed:false, type:"food", done:false, note:"", map:"" }
+    ],
+    restaurantsNote: ""
+  };
+
+  function loadData(){
+    try{
+      const raw = localStorage.getItem(KEY_DATA);
+      if(!raw){
+        localStorage.setItem(KEY_DATA, JSON.stringify(DEFAULT_DATA));
+        const d0 = structuredClone(DEFAULT_DATA);
+        syncDaysToMetaRange(d0, {preserveExisting:true});
+        saveData(d0);
+        return d0;
+      }
+      const d = JSON.parse(raw);
+      if(!d || typeof d !== "object") throw new Error("bad data");
+      // Ensure days exist
+      syncDaysToMetaRange(d, {preserveExisting:true});
+      return d;
+    }catch(e){
+      const d0 = structuredClone(DEFAULT_DATA);
+      syncDaysToMetaRange(d0, {preserveExisting:true});
+      return d0;
+    }
+  }
+  function saveData(d){
+    localStorage.setItem(KEY_DATA, JSON.stringify(d));
+  }
+
+  // ===== Backup / Import / Export =====
+  const KEY_BACKUP = KEY_DATA + "__backup_v1";
+
+  function downloadText(filename, text, mime="application/json"){
+    const blob = new Blob([text], {type: mime});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function makeBackup(reason="manual"){
+    try{
+      const cur = loadData();
+      const pack = { reason, backedUpAt: new Date().toISOString(),  cur };
+      localStorage.setItem(KEY_BACKUP, JSON.stringify(pack));
+    }catch(e){
+      // Ignore backup failures
+    }
+  }
+
+  function exportJson(){
+    const cur = loadData();
+    const pack = { exportedAt: new Date().toISOString(),  cur };
+    const stamp = new Date().toISOString().replaceAll(":", "").slice(0,15);
+    const filename = `trip-planner-backup-${stamp}.json`;
+    downloadText(filename, JSON.stringify(pack, null, 2));
+  }
+
+  function looksLikeTripData(d){
+    return d && typeof d === "object"
+      && d.meta && typeof d.meta === "object"
+      && Array.isArray(d.fixed)
+      && Array.isArray(d.days)
+      && Array.isArray(d.reminders)
+      && Array.isArray(d.restaurants);
+  }
+
+  function importJsonText(rawText){
+    const obj = JSON.parse(rawText);
+    const data = (obj && obj.data) ? obj.data : obj; // Accept 2 formats
+
+    if(!looksLikeTripData(data)){
+      alert("匯入失敗：JSON 格式不符合此 Trip Planner 的資料結構。");
+      return;
+    }
+
+    // Backup current data before overwriting
+    makeBackup("before_import");
+
+    // Normalize + save + re-render
+    syncDaysToMetaRange(data, {preserveExisting:true});
+    saveData(data);
+    renderAll();
+    alert("匯入完成！");
+  }
+
+  function typeLabel(type){
+    return ({
+      flight:"航班", hotel:"住宿", transport:"交通", food:"吃飯", visit:"景點", rule:"規則",
+      reminder:"提醒", other:"其他"
+    })[type] || "項目";
+  }
+  function typeChipClass(type){
+    return ({
+      flight:"flight", hotel:"hotel", transport:"transport", food:"food", visit:"visit", rule:"rule", reminder:"reminder"
+    })[type] || "";
+  }
+  function chipEl(text, cls){
+    const span = document.createElement("span");
+    span.className = `chip ${cls||""}`.trim();
+    span.textContent = text;
+    return span;
+  }
+  function confirmDanger(msg){ return window.confirm(msg); }
+  function sanitizeLocationsInput(s){
+    return (s||"")
+      .split(/[，,]/g)
+      .map(x=>x.trim())
+      .filter(Boolean);
+  }
+  function formatDateRange(meta){
+    const loc = (meta.locations||[]).filter(Boolean).join("・");
+    const range = (meta.start && 
+
+    a{ color: var(--accent); text-decoration: none; }
+    a:hover{ text-decoration: underline; }
+
+    .wrap{
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 22px 16px 40px;
+    }
+
+    header{
+      display:flex;
+      gap:14px;
+      align-items:flex-start;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    .title{
+      display:flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 260px;
+    }
+
+    .titleRow{
+      display:flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    h1{
+      margin:0;
+      font-size: 28px;
+      letter-spacing: .2px;
+      line-height: 1.15;
+    }
+    @media (max-width: 900px){
+      h1{ font-size: 22px; }
+    }
+
+    .sub{
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .toolbar{
+      display:flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    .field{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      background: rgba(17,24,39,.7);
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+    .field label{
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .field input[type="text"]{
+      width: 220px;
+      max-width: 60vw;
+      border:0;
+      outline:0;
+      background: transparent;
+      color: var(--text);
+      font-size: 14px;
+    }
+    .field input[type="checkbox"]{
+      transform: translateY(0.5px);
+      accent-color: var(--accent);
+    }
+
+    button{
+      cursor:pointer;
+      border: 1px solid var(--line);
+      background: rgba(17,24,39,.7);
+      color: var(--text);
+      padding: 9px 12px;
+      border-radius: 12px;
+      font-size: 13px;
+      box-shadow: var(--shadow);
+    }
+    button:hover{ border-color: rgba(96,165,250,.5); }
+
+    .btnSmall{
+      padding: 7px 10px;
+      font-size: 12px;
+      border-radius: 10px;
+      box-shadow: none;
+    }
+    .btnDanger{ border-color: rgba(251,113,133,.35); }
+    .btnDanger:hover{ border-color: rgba(251,113,133,.7); }
+    .btnAccent{ border-color: rgba(96,165,250,.35); }
+    .btnAccent:hover{ border-color: rgba(96,165,250,.7); }
+
+    .iconBtn{
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      border: 1px solid var(--line);
+      background: rgba(17,24,39,.7);
+      font-size: 14px;
+      user-select: none;
+    }
+    .iconBtn:hover{ border-color: rgba(96,165,250,.55); }
+
+    .grid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .card{
+      background: linear-gradient(180deg, rgba(17,24,39,.92), rgba(15,23,42,.85));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow:hidden;
+    }
+
+    .cardHead{
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display:flex;
+      align-items: center;
+      justify-content: space-between;
+      gap:10px;
+    }
+    .cardHead h2{
+      margin:0;
+      font-size: 14px;
+      letter-spacing:.2px;
+      color: #dbeafe;
+      display:flex;
+      align-items:center;
+      gap: 8px;
+    }
+    .cardBody{ padding: 12px 14px; }
+
+    .chip{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      background: rgba(31,41,55,.7);
+      border: 1px solid var(--line);
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: #d1d5db;
+      white-space: nowrap;
+    }
+    .chip.fixed{ border-color: rgba(96,165,250,.4); color:#bfdbfe; }
+    .chip.flex{ border-color: rgba(251,191,36,.35); color:#fde68a; }
+    .chip.hotel{ border-color: rgba(52,211,153,.35); color:#bbf7d0; }
+    .chip.flight{ border-color: rgba(248,113,113,.35); color:#fecaca; }
+    .chip.transport{ border-color: rgba(125,211,252,.25); color:#cffafe; }
+    .chip.reminder{ border-color: rgba(167,139,250,.30); color:#e9d5ff; }
+    .chip.food{ border-color: rgba(251,146,60,.35); color:#fed7aa; }
+    .chip.visit{ border-color: rgba(45,212,191,.30); color:#ccfbf1; }
+    .chip.rule{ border-color: rgba(244,114,182,.30); color:#fbcfe8; }
+
+    details.day{
+      border-top: 1px solid rgba(255,255,255,.04);
+    }
+    details.day:first-of-type{ border-top: 0; }
+
+    details.day > summary{
+      list-style: none;
+      cursor: pointer;
+      padding: 14px 14px;
+      display:flex;
+      align-items: center;
+      justify-content: space-between;
+      gap:10px;
+      user-select: none;
+    }
+    details.day > summary::-webkit-details-marker{ display:none; }
+
+    .dayTitle{
+      display:flex;
+      align-items: center;
+      gap:10px;
+      min-width: 0;
+    }
+
+    .dayTitle .d{
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: .2px;
+      color: #dbeafe;
+      padding: 5px 12px;
+      border: 1px solid rgba(96,165,250,.55);
+      border-radius: 999px;
+      background:
+        radial-gradient(120px 50px at 20% 50%, rgba(96,165,250,.35), transparent 70%),
+        rgba(30,58,138,.22);
+      flex: 0 0 auto;
+    }
+
+    .dayTitle .t{
+      font-weight: 750;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 55vw;
+    }
+
+    .dayMeta{
+      color: var(--muted);
+      font-size: 12px;
+      display:flex;
+      gap:8px;
+      align-items: center;
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+
+    .items{
+      padding: 0 14px 14px;
+      display:flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .item{
+      border: 1px solid var(--line);
+      background: rgba(17,24,39,.55);
+      border-radius: 12px;
+      padding: 10px;
+      display:grid;
+      grid-template-columns: 170px 1fr;
+      gap: 10px;
+    }
+
+    .time{
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #e0f2fe;
+      line-height: 1.35;
+      min-width: 0;
+    }
+    .time .small{ color: var(--muted); font-size: 11px; display:block; margin-top:6px; }
+
+    .main{
+      display:flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .row1{
+      display:flex;
+      align-items:flex-start;
+      justify-content: space-between;
+      gap:10px;
+    }
+
+    .text{
+      font-size: 13.5px;
+      line-height: 1.5;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    .badges{ display:flex; flex-wrap: wrap; gap: 6px; justify-content:flex-end; }
+
+    .row2{
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap:10px;
+      flex-wrap: wrap;
+    }
+
+    .actions{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .actions input[type="checkbox"]{ accent-color: var(--good); }
+
+    .notePreview{
+      color: rgba(156,163,175,.95);
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      border-left: 2px solid rgba(255,255,255,.08);
+      padding-left: 10px;
+      margin-top: 2px;
+    }
+
+    .muted{ color: var(--muted); }
+
+    .twoCol{
+      display:grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap: 12px;
+    }
+    @media (max-width: 900px){
+      .twoCol{ grid-template-columns: 1fr; }
+      .item{ grid-template-columns: 1fr; }
+      .dayTitle .t{ max-width: 70vw; }
+    }
+
+    .footerHint{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .headBtns{
+      display:flex;
+      gap:8px;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    /* ===== Modal (<dialog>) ===== */
+    dialog{
+      width: min(760px, 92vw);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 0;
+      background: linear-gradient(180deg, rgba(17,24,39,.98), rgba(15,23,42,.98));
+      color: var(--text);
+      box-shadow: 0 24px 80px rgba(0,0,0,.55);
+    }
+    dialog::backdrop{
+      background: rgba(0,0,0,.65);
+      backdrop-filter: blur(2px);
+    }
+    .modalHead{
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .modalHead .mh{
+      font-size: 14px;
+      font-weight: 800;
+      color: #dbeafe;
+      letter-spacing: .2px;
+      margin: 0;
+    }
+    .modalBody{
+      padding: 12px 14px 6px;
+    }
+    .modalGrid{
+      display:grid;
+      grid-template-columns: 170px 1fr;
+      gap: 10px 12px;
+      align-items: start;
+    }
+    @media (max-width: 720px){
+      .modalGrid{ grid-template-columns: 1fr; }
+    }
+    .mlabel{
+      color: var(--muted);
+      font-size: 12px;
+      padding-top: 9px;
+    }
+    .minput, .mselect, .mtextarea{
+      width: 100%;
+      border: 1px solid var(--line);
+      background: rgba(15,23,42,.65);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 9px 10px;
+      outline: none;
+      font-size: 13px;
+      font-family: var(--sans);
+    }
+    .mtextarea{
+      min-height: 84px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+    .mrow{
+      display:flex;
+      align-items:center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding-top: 6px;
+    }
+    .mrow label{
+      color: var(--muted);
+      font-size: 12px;
+      display:inline-flex;
+      align-items:center;
+      gap: 8px;
+      user-select: none;
+    }
+    .mrow input[type="checkbox"]{ accent-color: var(--accent); }
+    .modalFoot{
+      padding: 10px 14px 14px;
+      display:flex;
+      justify-content: flex-end;
+      gap: 10px;
+      border-top: 1px solid rgba(255,255,255,.06);
+    }
+
+    .mapBtn{
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      border-radius: 12px;
+      border: 1px solid rgba(96,165,250,.25);
+      background: rgba(17,24,39,.55);
+      color: #bfdbfe;
+      box-shadow: none;
+      font-size: 14px;
+    }
+    .mapBtn:hover{ border-color: rgba(96,165,250,.6); }
+
+    @media print{
+      body{ background: #fff; color: #111; }
+      .wrap{ max-width: 100%; padding: 0; }
+      header, .toolbar, .field, button, dialog{ display:none !important; }
+      .card{ box-shadow: none; border: 1px solid #ddd; }
+      .cardHead{ border-bottom: 1px solid #ddd; }
+      .item{ border: 1px solid #e5e7eb; background: #fff; }
+      a{ color: #111; text-decoration: underline; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <header>
+      <div class="title">
+        <div class="titleRow">
+          <h1 id="titleText">Trip Planner</h1>
+          <button id="editMetaTop" class="iconBtn" type="button" title="編輯旅遊設定" aria-label="編輯旅遊設定">⚙︎</button>
+        </div>
+        <div class="sub" id="subtitleText">純前端單檔：可搜尋、可勾選完成、可寫備註、可新增/刪除並自動保存。</div>
+      </div>
+
+      <div class="toolbar">
+        <div class="field">
+          <label for="q">搜尋</label>
+          <input id="q" type="text" placeholder="輸入：西湖 / HKG / 夜市 / 飯店..." />
+        </div>
+        <div class="field">
+          <label><input id="onlyFixed" type="checkbox" /> 只看固定</label>
+        </div>
+        <div class="field">
+          <label><input id="onlyFlex" type="checkbox" /> 只看彈性</label>
+        </div>
+        <div class="field">
+          <label><input id="onlyTodo" type="checkbox" /> 只看未完成</label>
+        </div>
+        <button id="expandAll" type="button">全部展開</button>
+        <button id="collapseAll" type="button">全部收起</button>
+        <button id="print" type="button">列印 / 存 PDF</button>
         <button id="resetDoneNote" type="button">清空勾選/備註</button>
         <button id="resetAll" class="btnDanger" type="button">重設全部</button>
       </div>
